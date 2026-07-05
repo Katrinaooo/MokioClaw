@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat > *)",
+      "Bash(cat)",
+      "Bash(d:/MokioClaw/.venv/Scripts/python.exe --version)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/python.exe -m pip install -e .)",
+      "Bash(.venv/Scripts/python.exe -m ensurepip)",
+      "Bash(.venv/Scripts/python.exe -c \"from mokioclaw.core.state import RuntimeState; s = RuntimeState\\(\\); print\\('state ok:', s.workspace\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"from mokioclaw.tools.registry import build_tools; print\\('registry ok'\\)\")",
+      "Bash(.venv/Scripts/python.exe -m mokioclaw --help)",
+      "Bash(.venv/Scripts/python.exe -m mokioclaw run \"test task\" --workspace d:/MokioClaw/test_ws)",
+      "Bash(rm -rf d:/MokioClaw/test_ws)"
+    ],
+    "additionalDirectories": [
+      "d:\\MokioClaw",
+      "d:\\MokioClaw\\src\\mokioclaw\\tools",
+      "d:\\MokioClaw\\test_ws"
+    ]
+  }
+}

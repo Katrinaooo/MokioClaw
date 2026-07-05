@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mokioclaw"
+version = "0.1.0"
+description = "MokioClaw — A CLI AI agent framework with tool-based architecture"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "langchain-openai>=0.1",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+mokioclaw = "mokioclaw.cli.app:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
