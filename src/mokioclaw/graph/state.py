@@ -36,6 +36,9 @@ class MokioGraphState(TypedDict, total=False):
     task: str
     """The user's task description."""
 
+    model_name: str
+    """OpenAI model name to use for all LLM calls."""
+
     runtime: RuntimeState
     """Workspace-scoped runtime state (paths, tools, etc.)."""
 

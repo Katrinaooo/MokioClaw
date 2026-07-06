@@ -1,128 +1,147 @@
-"""ReAct agent loop — stream_agent_events generator."""
+"""Graph-based agent — stream_agent_events via build_workflow().stream()."""
 
 import json
-import traceback
 from pathlib import Path
 from typing import Any, Iterator
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from mokioclaw.core.state import RuntimeState
-from mokioclaw.providers.openai_provider import create_model
-from mokioclaw.tools.registry import build_tools
-
-ACTOR_PROMPT = """\
-You are the actor node in MokioClaw's ReAct workflow.
-
-You implement the user's task using tools. Work inside the workspace only.
-
-Rules:
-- Use FileWriteTool for new files.
-- Use FileReadTool before editing existing files.
-- Use FileEditTool for focused edits.
-- Use BashTool to run commands and test results.
-- BashTool already runs inside the workspace. Use relative paths, never "cd /workspace".
-- End with a concise summary of files changed and commands run.
-"""
+from mokioclaw.graph.workflow import build_workflow
 
 
 def stream_agent_events(
     task: str,
     *,
     workspace: Path,
-    model_name: str = "gpt-4o",
-    max_loops: int = 10,
+    model_name: str = "gpt-5.5",
+    max_attempts: int = 3,
 ) -> Iterator[dict[str, Any]]:
-    """Run the ReAct loop, yielding structured events.
+    """Run the plan→execute→verify graph, yielding structured events.
 
     Yields:
-        ``{"type": "ai_message", "content": str}``
-            The full text content of each AI response (may be empty if only tool calls).
-
-        ``{"type": "tool_call", "name": str, "args": dict}``
-            One event per tool call the model requested.
-
-        ``{"type": "tool_result", "name": str, "result": str}``
-            The result of executing a tool call.
-
-        ``{"type": "final_answer", "content": str}``
-            Emitted when the loop ends (no more tool calls, or max_loops reached).
-            Contains the last AI text content.
+        node_start / node_end — bookend each graph node.
+        plan — planner output (summary, todos, criteria, commands).
+        ai_message / tool_call / tool_result — actor's ReAct loop.
+        verification — verifier verdict and checks.
+        final_answer — the final summary.
     """
-    # 1. Create state and tools
-    state = RuntimeState(workspace=workspace)
-    tools = build_tools(state)
-    tool_by_name = {t.name: t for t in tools}
+    runtime = RuntimeState(workspace=workspace)
+    graph = build_workflow()
 
-    # 2. Build initial messages
-    model = create_model(model_name=model_name).bind_tools(tools)
-    messages: list = [
-        SystemMessage(content=ACTOR_PROMPT),
-        HumanMessage(content=task),
-    ]
+    inputs: dict[str, Any] = {
+        "task": task,
+        "model_name": model_name,
+        "runtime": runtime,
+        "max_attempts": max_attempts,
+    }
 
-    last_text_content = ""
+    seen_ids: set[str] = set()
 
-    # 3. ReAct loop
-    for _loop_index in range(max_loops):
-        response = model.invoke(messages)
-        messages.append(response)
+    for chunk in graph.stream(inputs, stream_mode="updates"):
+        for node_name, node_output in chunk.items():
+            yield {"type": "node_start", "node": node_name}
 
-        # Extract text content
-        text = _extract_text(response)
-        last_text_content = text or last_text_content
+            if node_name == "planner":
+                yield from _emit_planner(node_output)
 
-        yield {"type": "ai_message", "content": text}
+            elif node_name == "actor":
+                yield from _emit_actor(node_output, seen_ids)
 
-        # No tool calls → done
-        if not response.tool_calls:
-            yield {
-                "type": "final_answer",
-                "content": text or "(no output)",
-            }
-            return
+            elif node_name == "verifier":
+                yield from _emit_verifier(node_output)
 
-        # 4. Execute each tool call
-        for call in response.tool_calls:
-            name = call["name"]
-            args = call["args"]
-            tool_id = call["id"]
+            elif node_name == "final":
+                yield from _emit_final(node_output)
 
-            yield {"type": "tool_call", "name": name, "args": args}
+            yield {"type": "node_end", "node": node_name}
 
-            tool = tool_by_name.get(name)
-            if tool is None:
-                result = f"Error: unknown tool {name!r}"
-            else:
-                try:
-                    result = tool.invoke(args)
-                except Exception:
-                    result = f"Error executing {name}: {traceback.format_exc()}"
 
-            # Ensure result is a string for ToolMessage
-            if not isinstance(result, str):
-                result = json.dumps(result, ensure_ascii=False)
+# ---------------------------------------------------------------------------
+# Per-node event emitters
+# ---------------------------------------------------------------------------
 
-            yield {"type": "tool_result", "name": name, "result": result}
+def _emit_planner(output: dict) -> Iterator[dict]:
+    """Emit the planner's structured plan."""
+    todos = output.get("todos") or []
+    criteria = output.get("acceptance_criteria") or []
+    commands = output.get("verification_commands") or []
 
-            messages.append(ToolMessage(content=result, tool_call_id=tool_id))
-
-    # 5. Max loops reached
     yield {
-        "type": "final_answer",
-        "content": last_text_content or "(max loops reached, no response)",
+        "type": "plan",
+        "summary": output.get("plan_summary", ""),
+        "todos": todos,
+        "acceptance_criteria": criteria,
+        "verification_commands": commands,
     }
 
 
-def _extract_text(response: AIMessage) -> str:
-    """Extract plain-text content from an AIMessage, handling both string and list content."""
-    content = response.content
+def _emit_actor(output: dict, seen_ids: set[str]) -> Iterator[dict]:
+    """Emit AI messages and tool calls from the actor's message history.
+
+    Only emits messages whose id hasn't been seen in a previous actor run
+    (the graph may loop back through the actor via planner→actor on retry).
+    """
+    messages = output.get("messages") or []
+    for msg in messages:
+        mid = getattr(msg, "id", None)
+        if mid and mid in seen_ids:
+            continue
+        if mid:
+            seen_ids.add(mid)
+
+        if isinstance(msg, AIMessage):
+            content = _extract_text(msg)
+            if content:
+                yield {"type": "ai_message", "content": content}
+            if msg.tool_calls:
+                for call in msg.tool_calls:
+                    yield {
+                        "type": "tool_call",
+                        "name": call["name"],
+                        "args": call["args"],
+                    }
+
+        elif isinstance(msg, ToolMessage):
+            yield {
+                "type": "tool_result",
+                "name": getattr(msg, "name", None) or "unknown",
+                "result": _extract_text(msg),
+            }
+
+
+def _emit_verifier(output: dict) -> Iterator[dict]:
+    """Emit verification results."""
+    yield {
+        "type": "verification",
+        "passed": output.get("passed", False),
+        "checks": output.get("verification_checks") or [],
+        "results": output.get("verification_results") or [],
+    }
+
+
+def _emit_final(output: dict) -> Iterator[dict]:
+    """Emit the final answer."""
+    yield {
+        "type": "final_answer",
+        "content": output.get("final_answer", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _extract_text(msg) -> str:
+    """Extract plain-text content from any message."""
+    content = getattr(msg, "content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [item for item in content if isinstance(item, str) or item.get("type") == "text"]
-        return "".join(
+        parts = [
             item if isinstance(item, str) else item.get("text", "")
-            for item in parts
-        )
+            for item in content
+            if isinstance(item, str) or item.get("type") == "text"
+        ]
+        return "".join(parts)
     return str(content)

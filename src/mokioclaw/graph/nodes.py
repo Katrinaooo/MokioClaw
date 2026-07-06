@@ -11,79 +11,16 @@ from langchain_core.tools import StructuredTool
 
 from mokioclaw.core.state import RuntimeState
 from mokioclaw.graph.state import MokioGraphState, VerificationResult
+from mokioclaw.prompts.stage2 import (
+    ACTOR_PROMPT,
+    PLANNER_PROMPT,
+    PLANNER_REVISE_PROMPT,
+    VERIFIER_PROMPT,
+)
 from mokioclaw.providers.openai_provider import create_model
 from mokioclaw.tools.file_tools import build_file_read_tool
 from mokioclaw.tools.grep_tool import build_grep_tool
 from mokioclaw.tools.registry import build_tools
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-PLANNER_PROMPT = """\
-You are the planner in MokioClaw's workflow. Your job is to create a detailed,
-executable plan for the user's task.
-
-Break the task down into a structured plan.  You MUST call the TodoWriteTool
-with your plan — do not output plain text.
-
-Rules for the plan:
-- Each todo item must be concrete and actionable.
-- Acceptance criteria must be specific and verifiable
-  (e.g. "file main.py exists and runs without error").
-- Verification commands are shell commands that can be run to check success.
-  Use relative paths — the workspace is already the current directory.
-- Keep verification commands simple: ls, cat, python -c "...", test -f, etc.
-"""
-
-PLANNER_REVISE_PROMPT = """\
-You are the planner in MokioClaw's workflow.  The previous plan failed
-verification.  Your job is to revise the plan based on the error feedback.
-
-Focus on fixing the specific issues identified by the verifier.  You MUST call
-the TodoWriteTool with your revised plan.
-"""
-
-ACTOR_PROMPT = """\
-You are the actor in MokioClaw's workflow.  Execute the plan step by step.
-
-You have access to a todo list.  Use TodoUpdateTool to mark each item as
-"in_progress" when you start it and "completed" when you finish.
-If something cannot be done, mark it "blocked" with a note.
-
-Rules:
-- Use FileWriteTool for new files.
-- Use FileReadTool before editing existing files.
-- Use FileEditTool for focused edits — old_text must be unique in the file.
-- Use BashTool to run commands and test results.
-- BashTool already runs inside the workspace. Use relative paths,
-  never "cd /workspace".
-- Work through the todos in order. Do not skip items without explanation.
-- End with a concise summary of files changed and commands run.
-"""
-
-VERIFIER_PROMPT = """\
-You are the verifier in MokioClaw's workflow.  Your job is to check whether the
-actor successfully completed the plan.
-
-You have read-only tools (FileReadTool, GrepTool).  Inspect the workspace to
-verify each acceptance criterion and check the actor's work.
-
-After inspection, output a JSON object with this structure:
-
-{
-  "passed": true,
-  "reason": "All criteria met. Files are correct and tests pass.",
-  "checks": [
-    {"name": "File exists", "passed": true, "detail": "main.py found"},
-    {"name": "Syntax valid", "passed": true, "detail": "python -c 'import main' succeeds"}
-  ],
-  "recommended_next_instruction": ""
-}
-
-If something is wrong, set "passed": false, explain in "reason", and provide a
-specific "recommended_next_instruction" that tells the planner what to fix.
-"""
 
 # ---------------------------------------------------------------------------
 # Custom tools for the graph
@@ -244,7 +181,7 @@ def planner_node(state: MokioGraphState) -> dict:
     - Retry (verification failed): revise the plan based on last_error.
     """
     runtime = state.get("runtime") or RuntimeState()
-    model = create_model().bind_tools([build_todo_write_tool()])
+    model = create_model(model_name=state.get("model_name", "gpt-5.5")).bind_tools([build_todo_write_tool()])
 
     existing_todos = state.get("todos")
 
@@ -295,7 +232,6 @@ def planner_node(state: MokioGraphState) -> dict:
             "todos": args.get("todos", []),
             "acceptance_criteria": args.get("acceptance_criteria", []),
             "verification_commands": args.get("verification_commands", []),
-            "messages": [response],
         }
 
     # Fallback: model didn't use the tool — try to parse from text
@@ -306,7 +242,6 @@ def planner_node(state: MokioGraphState) -> dict:
         "todos": fallback.get("todos", []),
         "acceptance_criteria": fallback.get("acceptance_criteria", []),
         "verification_commands": fallback.get("verification_commands", []),
-        "messages": [response],
     }
 
 
@@ -322,7 +257,7 @@ def actor_node(state: MokioGraphState) -> dict:
     tools = build_tools(runtime) + [build_todo_update_tool(todos)]
     tool_by_name = {t.name: t for t in tools}
 
-    model = create_model().bind_tools(tools)
+    model = create_model(model_name=state.get("model_name", "gpt-5.5")).bind_tools(tools)
 
     plan_summary = state.get("plan_summary", "")
     todos_json = json.dumps(todos, ensure_ascii=False, indent=2)
@@ -332,12 +267,10 @@ def actor_node(state: MokioGraphState) -> dict:
         f"## Todos\n```json\n{todos_json}\n```\n"
     )
 
-    messages: list = list(state.get("messages") or [])
-    if not messages:
-        messages = [
-            SystemMessage(content=ACTOR_PROMPT + plan_context),
-            HumanMessage(content=state["task"]),
-        ]
+    messages: list = [
+        SystemMessage(content=ACTOR_PROMPT + plan_context),
+        HumanMessage(content=state["task"]),
+    ]
 
     last_text = ""
 
@@ -368,7 +301,7 @@ def actor_node(state: MokioGraphState) -> dict:
             if not isinstance(result, str):
                 result = json.dumps(result, ensure_ascii=False)
 
-            messages.append(ToolMessage(content=result, tool_call_id=tool_id))
+            messages.append(ToolMessage(content=result, tool_call_id=tool_id, name=name))
 
     return {
         "messages": messages,
@@ -393,7 +326,7 @@ def verifier_node(state: MokioGraphState) -> dict:
         verification_results.append(result)
 
     # --- 2. LLM verification with read-only tools ---
-    model = create_model().bind_tools(build_read_only_tools(runtime))
+    model = create_model(model_name=state.get("model_name", "gpt-5.5")).bind_tools(build_read_only_tools(runtime))
     tool_by_name = {
         t.name: t for t in build_read_only_tools(runtime)
     }
@@ -454,7 +387,7 @@ def verifier_node(state: MokioGraphState) -> dict:
                 result = json.dumps(result, ensure_ascii=False)
 
             messages.append(
-                ToolMessage(content=result, tool_call_id=call["id"])
+                ToolMessage(content=result, tool_call_id=call["id"], name=call["name"])
             )
 
     # Parse the final response
