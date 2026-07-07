@@ -27,6 +27,24 @@ class VerificationResult(TypedDict):
     stderr: str
 
 
+class SourceItem(TypedDict, total=False):
+    """A source URL collected during research."""
+
+    title: str
+    url: str
+    content: str
+    score: float
+
+
+class AgentHandoff(TypedDict, total=False):
+    """Record of a handoff between planner and a specialist agent."""
+
+    from_agent: str
+    to_agent: str
+    instruction: str
+    result: str
+
+
 class MokioGraphState(TypedDict, total=False):
     """Shared state for the MokioClaw LangGraph.
 
@@ -85,3 +103,17 @@ class MokioGraphState(TypedDict, total=False):
     verification_checks: list[dict]
     """Structured check results from the verifier LLM:
     ``[{name: str, passed: bool, detail: str}, ...]``."""
+
+    # --- Stage 3 fields: sub-agent orchestration ---
+
+    research_notes: str
+    """Consolidated research notes from searchAgent runs."""
+
+    sources: list[SourceItem]
+    """Source URLs and metadata collected during research."""
+
+    agent_handoffs: list[AgentHandoff]
+    """Log of planner → specialist handoffs for audit and debugging."""
+
+    code_agent_summary: str
+    """Final summary from the most recent codeAgent run."""

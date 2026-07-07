@@ -120,6 +120,16 @@ def run(
         elif etype == "verification":
             _render_verification(event)
 
+        elif etype == "handoff":
+            console.print(
+                Panel(
+                    f"[bold]🔄 {event.get('from', '?')} → {event.get('to', '?')}[/bold]\n"
+                    f"[dim]{event.get('instruction', '')[:200]}[/dim]",
+                    border_style="magenta",
+                    title="Delegation",
+                )
+            )
+
         elif etype == "final_answer":
             console.print()
             console.print(

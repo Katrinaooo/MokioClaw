@@ -5,7 +5,6 @@ import json
 from langgraph.graph import END, START, StateGraph
 
 from mokioclaw.graph.nodes import (
-    actor_node,
     planner_node,
     verifier_node,
     verifier_route,
@@ -72,21 +71,22 @@ def build_workflow():
 
     Graph structure::
 
-        START → planner → actor → verifier ──passed──→ final → END
-                                ↑        │
-                                │ failed & attempts < max
-                                └──────────────────────┘
+        START → planner → verifier ──passed──→ final → END
+                    ↑        │
+                    │ failed & attempts < max
+                    └──────────────────────┘
+
+    The planner delegates to specialist agents (searchAgent, codeAgent)
+    via tool calls instead of going through a separate actor node.
     """
     graph = StateGraph(MokioGraphState)
 
     graph.add_node("planner", planner_node)
-    graph.add_node("actor", actor_node)
     graph.add_node("verifier", verifier_node)
     graph.add_node("final", final_node)
 
     graph.add_edge(START, "planner")
-    graph.add_edge("planner", "actor")
-    graph.add_edge("actor", "verifier")
+    graph.add_edge("planner", "verifier")
     graph.add_conditional_edges(
         "verifier",
         verifier_route,
