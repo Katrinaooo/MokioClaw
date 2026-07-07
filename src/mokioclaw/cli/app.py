@@ -21,8 +21,9 @@ console = Console()
 # Node display labels
 NODE_LABELS = {
     "planner": "📋 Planner",
-    "actor": "🔧 Actor",
     "verifier": "✅ Verifier",
+    "context_monitor": "📈 Context Monitor",
+    "context_compressor": "🗜️ Context Compressor",
     "final": "📝 Final",
 }
 
@@ -130,6 +131,12 @@ def run(
                 )
             )
 
+        elif etype == "context_monitor":
+            _render_context_monitor(event)
+
+        elif etype == "context_compression":
+            _render_context_compression(event)
+
         elif etype == "final_answer":
             console.print()
             console.print(
@@ -219,6 +226,58 @@ def _truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len] + f"\n… (truncated, total {len(text)} chars)"
+
+
+def _render_context_monitor(event: dict) -> None:
+    """Render context monitor: token count, limit, and compression flag."""
+    token_count = event.get("token_count", 0)
+    token_limit = event.get("token_limit", 400_000)
+    pct = token_count / max(token_limit, 1) * 100
+    should_compress = event.get("should_compress", False)
+    next_node = event.get("next_node", "")
+
+    bar = _make_bar(pct, 30)
+    flag = "⚠️ 压缩触发!" if should_compress else ""
+
+    console.print(
+        Panel(
+            f"[bold]Tokens:[/bold] {token_count:,} / {token_limit:,}  ({pct:.1f}%)\n"
+            f"[dim]{bar}[/dim]\n"
+            f"[bold]Next:[/bold] {next_node}  {flag}",
+            border_style="yellow" if should_compress else "dim",
+            title="📈 Context Monitor",
+        )
+    )
+
+
+def _render_context_compression(event: dict) -> None:
+    """Render compression result."""
+    before = event.get("tokens_before", 0)
+    after = event.get("tokens_after", 0)
+    saved = before - after
+    pct = saved / max(before, 1) * 100
+
+    console.print(
+        Panel(
+            f"[bold]Tokens:[/bold] {before:,} → {after:,}  "
+            f"([green]saved {saved:,} ({pct:.1f}%)[/green])",
+            border_style="green",
+            title="🗜️ Context Compression",
+        )
+    )
+
+
+def _make_bar(pct: float, width: int) -> str:
+    """Draw a simple ASCII progress bar."""
+    filled = int(width * pct / 100)
+    if filled > width:
+        filled = width
+    bar = "█" * filled + "░" * (width - filled)
+    if pct > 80:
+        return f"[red]{bar}[/red]"
+    elif pct > 50:
+        return f"[yellow]{bar}[/yellow]"
+    return f"[green]{bar}[/green]"
 
 
 @app.callback(invoke_without_command=True)

@@ -6,6 +6,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from mokioclaw.graph.memory import build_layered_memory, format_layered_memory_for_prompt
 from mokioclaw.providers.openai_provider import create_model
 from mokioclaw.tools.web_search_tool import build_web_search_tool
 
@@ -48,14 +49,24 @@ def run_search_agent(
     tool = build_web_search_tool()
     model = create_model(model_name=model_name).bind_tools([tool])
 
+    # Build and inject layered memory
+    memory = build_layered_memory(state, node="searchAgent")
+    if writer is not None:
+        writer({
+            "type": "memory_snapshot",
+            "node": "searchAgent",
+            "memory": memory,
+        })
+
     messages: list = [
         SystemMessage(content=SEARCH_AGENT_PROMPT),
         HumanMessage(
             content=(
                 f"Research task: {instruction}\n\n"
                 f"Existing research notes:\n{research_notes or '(none)'}\n\n"
-                "Search the web for relevant, reliable information and "
-                "return a concise summary with source URLs."
+                f"Search the web for relevant, reliable information and "
+                f"return a concise summary with source URLs.\n\n"
+                f"## Memory Snapshot\n{format_layered_memory_for_prompt(memory)}"
             )
         ),
     ]

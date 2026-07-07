@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from mokioclaw.core.state import RuntimeState
+from mokioclaw.graph.memory import build_layered_memory, format_layered_memory_for_prompt
 from mokioclaw.providers.openai_provider import create_model
 from mokioclaw.tools.registry import build_tools
 
@@ -68,8 +69,14 @@ def run_code_agent(
 
     model = create_model(model_name=model_name).bind_tools(tools)
 
-    # --- 2. Build layered memory snapshot (stub — extended in later stages) ---
-    memory_snapshot = _build_memory_snapshot(state)
+    # --- 2. Build layered memory ---
+    memory = build_layered_memory(state, node="codeAgent")
+    if writer is not None:
+        writer({
+            "type": "memory_snapshot",
+            "node": "codeAgent",
+            "memory": memory,
+        })
 
     # --- 3. Build messages ---
     plan_summary = state.get("plan_summary", "")
@@ -80,7 +87,7 @@ def run_code_agent(
         f"Instruction: {instruction}\n\n"
         f"Plan: {plan_summary}\n\n"
         f"Research notes: {research_notes or '(none)'}\n\n"
-        f"Memory: {memory_snapshot}"
+        f"## Memory Snapshot\n{format_layered_memory_for_prompt(memory)}"
     )
 
     messages: list = [
@@ -147,37 +154,6 @@ def run_code_agent(
         "messages": messages,
         "tool_events": tool_events,
     }
-
-
-# ---------------------------------------------------------------------------
-# Layered memory (stub — extended in later stages)
-# ---------------------------------------------------------------------------
-
-def _build_memory_snapshot(state: dict) -> str:
-    """Build a snapshot of the current session context.
-
-    This is a stub that will be extended with notepad / checkpoint data
-    in later implementation stages.
-    """
-    parts: list[str] = []
-
-    plan = state.get("plan_summary", "")
-    if plan:
-        parts.append(f"Plan: {plan}")
-
-    todos = state.get("todos") or []
-    if todos:
-        todo_lines = []
-        for t in todos:
-            status = t.get("status", "pending")
-            todo_lines.append(f"  [{status}] {t.get('content', '')}")
-        parts.append(f"Todos:\n" + "\n".join(todo_lines))
-
-    research = state.get("research_notes", "")
-    if research:
-        parts.append(f"Research: {research[:500]}")
-
-    return "\n\n".join(parts) if parts else "(no prior context)"
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 """Graph-based agent — stream_agent_events via build_workflow().stream()."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -53,6 +54,12 @@ def stream_agent_events(
             elif node_name == "final":
                 yield from _emit_final(node_output)
 
+            elif node_name == "context_monitor":
+                yield from _emit_context_monitor(node_output)
+
+            elif node_name == "context_compressor":
+                yield from _emit_context_compressor(node_output)
+
             yield {"type": "node_end", "node": node_name}
 
 
@@ -99,6 +106,29 @@ def _emit_final(output: dict) -> Iterator[dict]:
     yield {
         "type": "final_answer",
         "content": output.get("final_answer", ""),
+    }
+
+
+def _emit_context_monitor(output: dict) -> Iterator[dict]:
+    """Emit context monitor status."""
+    yield {
+        "type": "context_monitor",
+        "token_count": output.get("context_token_count", 0),
+        "token_limit": output.get("context_token_limit", 400_000),
+        "should_compress": output.get("context_should_compress", False),
+        "next_node": output.get("context_next_node", ""),
+    }
+
+
+def _emit_context_compressor(output: dict) -> Iterator[dict]:
+    """Emit compression summary."""
+    events = output.get("compression_events") or []
+    last = events[-1] if events else {}
+    yield {
+        "type": "context_compression",
+        "tokens_before": last.get("tokens_before", 0),
+        "tokens_after": last.get("tokens_after", 0),
+        "summary_preview": (output.get("context_summary") or "")[:300],
     }
 
 

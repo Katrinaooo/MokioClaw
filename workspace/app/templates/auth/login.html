@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 - 后台管理系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-page">
+    <main class="login-panel">
+        <h1>后台登录</h1>
+        <p>使用管理员账号进入管理控制台</p>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-list">
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        <form method="post" class="form-stack">
+            <label>
+                用户名
+                <input type="text" name="username" autocomplete="username" required autofocus>
+            </label>
+            <label>
+                密码
+                <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+            <label class="checkline">
+                <input type="checkbox" name="remember">
+                保持登录
+            </label>
+            <button class="button primary" type="submit">登录</button>
+        </form>
+    </main>
+</body>
+</html>

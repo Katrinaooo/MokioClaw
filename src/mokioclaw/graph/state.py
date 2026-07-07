@@ -45,6 +45,23 @@ class AgentHandoff(TypedDict, total=False):
     result: str
 
 
+class CompressionEvent(TypedDict, total=False):
+    """Record of a context compression event."""
+
+    timestamp: str
+    reason: str
+    tokens_before: int
+    tokens_after: int
+
+
+class LayeredMemory(TypedDict, total=False):
+    """Snapshot of the three-layer memory for prompt injection."""
+
+    rules: dict
+    working_memory: dict
+    history_summary_store: dict
+
+
 class MokioGraphState(TypedDict, total=False):
     """Shared state for the MokioClaw LangGraph.
 
@@ -117,3 +134,29 @@ class MokioGraphState(TypedDict, total=False):
 
     code_agent_summary: str
     """Final summary from the most recent codeAgent run."""
+
+    # --- Memory / compression fields ---
+
+    context_summary: str
+    """Compressed summary of earlier conversation turns."""
+
+    context_token_count: int
+    """Estimated token count of the current context."""
+
+    context_token_limit: int
+    """Token threshold that triggers compression."""
+
+    context_should_compress: bool
+    """Flag set when context_token_count >= context_token_limit."""
+
+    context_next_node: str
+    """Node that requested the compression check."""
+
+    compression_events: list[CompressionEvent]
+    """Log of compression events for audit."""
+
+    memory_snapshot: LayeredMemory
+    """Cached layered memory snapshot for the current turn."""
+
+    history_summary: str
+    """Content of HISTORY_SUMMARY.md (compressed conversation history)."""

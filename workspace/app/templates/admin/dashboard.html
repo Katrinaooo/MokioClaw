@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 - 后台管理系统{% endblock %}
+{% block content %}
+<section class="page-heading">
+    <h1>仪表盘</h1>
+    <p>系统用户与管理员概览</p>
+</section>
+<section class="stats-grid">
+    <article class="stat-card">
+        <span>用户总数</span>
+        <strong>{{ user_count }}</strong>
+    </article>
+    <article class="stat-card">
+        <span>管理员</span>
+        <strong>{{ admin_count }}</strong>
+    </article>
+    <article class="stat-card">
+        <span>当前账号</span>
+        <strong>{{ current_user.username }}</strong>
+    </article>
+</section>
+<section class="panel">
+    <div class="panel-header">
+        <h2>最近用户</h2>
+        <a class="button ghost" href="{{ url_for('admin.users') }}">查看全部</a>
+    </div>
+    <table class="data-table">
+        <thead>
+            <tr><th>ID</th><th>用户名</th><th>邮箱</th><th>角色</th><th>创建时间</th></tr>
+        </thead>
+        <tbody>
+            {% for user in latest_users %}
+                <tr>
+                    <td>{{ user.id }}</td>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>{{ '管理员' if user.is_admin else '用户' }}</td>
+                    <td>{{ user.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

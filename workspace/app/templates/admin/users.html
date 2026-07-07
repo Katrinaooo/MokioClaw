@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}用户管理 - 后台管理系统{% endblock %}
+{% block content %}
+<section class="page-heading">
+    <h1>用户管理</h1>
+    <p>查看系统账号、邮箱和角色</p>
+</section>
+<section class="panel">
+    <div class="panel-header">
+        <h2>用户列表</h2>
+        <span class="count">共 {{ users|length }} 个用户</span>
+    </div>
+    <table class="data-table">
+        <thead>
+            <tr><th>ID</th><th>用户名</th><th>邮箱</th><th>角色</th><th>创建时间</th></tr>
+        </thead>
+        <tbody>
+            {% for user in users %}
+                <tr>
+                    <td>{{ user.id }}</td>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>{{ '管理员' if user.is_admin else '用户' }}</td>
+                    <td>{{ user.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="5" class="empty">暂无用户</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

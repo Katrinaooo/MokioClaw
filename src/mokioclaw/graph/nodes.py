@@ -6,15 +6,20 @@ import subprocess
 import traceback
 from typing import Any
 
+from datetime import datetime, timezone
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from langgraph.graph.message import RemoveMessage
 
 from mokioclaw.agents.code_agent import run_code_agent
 from mokioclaw.agents.search_agent import run_search_agent
 from mokioclaw.core.state import RuntimeState
+from mokioclaw.graph.memory import build_layered_memory
 from mokioclaw.graph.state import MokioGraphState, VerificationResult
 from mokioclaw.prompts.stage2 import ACTOR_PROMPT
 from mokioclaw.prompts.stage3 import PLANNER_PROMPT, VERIFIER_PROMPT
+from mokioclaw.prompts.stage4 import CONTEXT_COMPRESSION_PROMPT
 from mokioclaw.providers.openai_provider import create_model
 from mokioclaw.tools.file_tools import build_file_read_tool
 from mokioclaw.tools.grep_tool import build_grep_tool
@@ -235,6 +240,93 @@ def _extract_text(response: AIMessage) -> str:
     return str(content)
 
 
+# ---------------------------------------------------------------------------
+# Memory injection helpers
+# ---------------------------------------------------------------------------
+
+def memory_event(memory: dict, *, node: str) -> dict:
+    """Build a custom event for a memory snapshot."""
+    return {
+        "type": "memory_snapshot",
+        "node": node,
+        "memory": memory,
+    }
+
+
+def _planner_input(state: dict, memory: dict) -> str:
+    """Build the planner's HumanMessage content with memory injected."""
+    from mokioclaw.graph.memory import format_layered_memory_for_prompt
+
+    runtime = state.get("runtime") or RuntimeState()
+    existing_todos = state.get("todos")
+
+    if not existing_todos:
+        return (
+            f"Task: {state['task']}\n\n"
+            f"Workspace: {runtime.workspace}\n\n"
+            f"Create a plan using TodoWriteTool, then delegate work to "
+            f"the specialist agents.\n\n"
+            f"## Memory Snapshot\n{format_layered_memory_for_prompt(memory)}"
+        )
+
+    last_error = state.get("last_error", "Verification failed")
+    verification_checks = state.get("verification_checks", [])
+
+    return (
+        f"Task: {state['task']}\n\n"
+        f"Previous plan summary: {state.get('plan_summary', '')}\n\n"
+        f"Previous todos:\n"
+        f"{json.dumps(existing_todos, ensure_ascii=False, indent=2)}\n\n"
+        f"Verification FAILED.\n"
+        f"Error: {last_error}\n\n"
+        f"Verification checks:\n"
+        f"{json.dumps(verification_checks, ensure_ascii=False, indent=2)}\n\n"
+        f"Revise the plan using TodoWriteTool, then delegate only "
+        f"the missing fixes to the specialist agents.\n\n"
+        f"## Memory Snapshot\n{format_layered_memory_for_prompt(memory)}"
+    )
+
+
+def _code_agent_input(state: dict, instruction: str, memory: dict) -> str:
+    """Build the codeAgent's HumanMessage content with memory injected."""
+    from mokioclaw.graph.memory import format_layered_memory_for_prompt
+
+    plan_summary = state.get("plan_summary", "")
+    research_notes = state.get("research_notes", "")
+
+    return (
+        f"Task: {state.get('task', '')}\n\n"
+        f"Instruction: {instruction}\n\n"
+        f"Plan: {plan_summary}\n\n"
+        f"Research notes: {research_notes or '(none)'}\n\n"
+        f"## Memory Snapshot\n{format_layered_memory_for_prompt(memory)}"
+    )
+
+
+def _verifier_input(state: dict, cmd_results_summary: str, memory: dict) -> str:
+    """Build the verifier's HumanMessage content with memory injected."""
+    from mokioclaw.graph.memory import format_layered_memory_for_prompt
+
+    criteria_text = "\n".join(
+        f"- {c}" for c in state.get("acceptance_criteria", [])
+    )
+    agent_output = (
+        state.get("code_agent_summary")
+        or state.get("last_actor_summary", "")
+    )
+
+    return (
+        f"Task: {state['task']}\n\n"
+        f"Plan: {state.get('plan_summary', '')}\n\n"
+        f"Acceptance criteria:\n{criteria_text}\n\n"
+        f"Agent output:\n{agent_output}\n\n"
+        f"Verification command results:\n{cmd_results_summary}\n\n"
+        f"Use FileReadTool and GrepTool to inspect the workspace, "
+        f"then output your JSON verdict.\n\n"
+        f"## Memory Snapshot\n{format_layered_memory_for_prompt(memory)}"
+    )
+
+
 def _run_command(command: str, cwd: str) -> VerificationResult:
     """Run a single shell command and return a VerificationResult."""
     try:
@@ -311,6 +403,10 @@ def planner_node(state: MokioGraphState) -> dict:
     runtime = state.get("runtime") or RuntimeState()
     writer = get_stream_writer()
 
+    # Build and inject layered memory
+    memory = build_layered_memory(state, node="planner")
+    writer(memory_event(memory, node="planner"))
+
     # Accumulated updates that will be returned at the end
     accumulated: dict[str, Any] = {
         "research_notes": state.get("research_notes", ""),
@@ -339,36 +435,13 @@ def planner_node(state: MokioGraphState) -> dict:
         # --- First run: generate plan ---
         messages = [
             SystemMessage(content=PLANNER_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Task: {state['task']}\n\n"
-                    f"Workspace: {runtime.workspace}\n\n"
-                    "Create a plan using TodoWriteTool, then delegate work to "
-                    "the specialist agents."
-                )
-            ),
+            HumanMessage(content=_planner_input(state, memory)),
         ]
     else:
         # --- Retry: revise plan ---
-        last_error = state.get("last_error", "Verification failed")
-        verification_checks = state.get("verification_checks", [])
-
         messages = [
             SystemMessage(content=PLANNER_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Task: {state['task']}\n\n"
-                    f"Previous plan summary: {state.get('plan_summary', '')}\n\n"
-                    f"Previous todos:\n"
-                    f"{json.dumps(existing_todos, ensure_ascii=False, indent=2)}\n\n"
-                    f"Verification FAILED.\n"
-                    f"Error: {last_error}\n\n"
-                    f"Verification checks:\n"
-                    f"{json.dumps(verification_checks, ensure_ascii=False, indent=2)}\n\n"
-                    "Revise the plan using TodoWriteTool, then delegate only "
-                    "the missing fixes to the specialist agents."
-                )
-            ),
+            HumanMessage(content=_planner_input(state, memory)),
         ]
 
     # --- ReAct loop ---
@@ -444,6 +517,7 @@ def planner_node(state: MokioGraphState) -> dict:
         "agent_handoffs": accumulated["agent_handoffs"],
         "code_agent_summary": accumulated["code_agent_summary"],
         "messages": accumulated["messages"],
+        "context_next_node": "verifier",
     }
 
 
@@ -530,6 +604,12 @@ def verifier_node(state: MokioGraphState) -> dict:
     """
     runtime = state.get("runtime") or RuntimeState()
 
+    # Build and inject layered memory
+    memory = build_layered_memory(state, node="verifier")
+    from langgraph.config import get_stream_writer
+    writer = get_stream_writer()
+    writer(memory_event(memory, node="verifier"))
+
     # --- 1. Run verification commands ---
     verification_results: list[VerificationResult] = []
     for cmd in state.get("verification_commands", []):
@@ -569,15 +649,7 @@ def verifier_node(state: MokioGraphState) -> dict:
     messages = [
         SystemMessage(content=VERIFIER_PROMPT),
         HumanMessage(
-            content=(
-                f"Task: {state['task']}\n\n"
-                f"Plan: {state.get('plan_summary', '')}\n\n"
-                f"Acceptance criteria:\n{criteria_text}\n\n"
-                f"Agent output:\n{agent_output}\n\n"
-                f"Verification command results:\n{cmd_results_summary}\n\n"
-                "Use FileReadTool and GrepTool to inspect the workspace, "
-                "then output your JSON verdict."
-            )
+            content=_verifier_input(state, cmd_results_summary, memory)
         ),
     ]
 
@@ -621,6 +693,7 @@ def verifier_node(state: MokioGraphState) -> dict:
         "verification_results": verification_results,
         "verification_checks": verdict.get("checks", []),
         "messages": messages,
+        "context_next_node": "final" if passed else "planner",
     }
 
     if not passed:
@@ -639,8 +712,225 @@ def verifier_node(state: MokioGraphState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Route
+# Context monitor
 # ---------------------------------------------------------------------------
+
+def context_monitor_node(state: MokioGraphState) -> dict:
+    """Estimate token usage and flag whether context compression is needed.
+
+    1. Estimates token count from messages + memory snapshot.
+    2. Sets ``context_should_compress`` if the count exceeds the limit.
+    3. ``context_next_node`` is set by the upstream node to control routing.
+    """
+    token_count = _estimate_tokens(state)
+    token_limit = state.get("context_token_limit", 50000)
+    should_compress = token_count > token_limit
+
+    return {
+        "context_token_count": token_count,
+        "context_should_compress": should_compress,
+        "context_next_node": state.get("context_next_node", "verifier"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Context compressor
+# ---------------------------------------------------------------------------
+
+def context_compressor_node(state: MokioGraphState) -> dict:
+    """Compress the conversation history to free up context window.
+
+    1. Calls an LLM to summarise the full message history + memory snapshot.
+    2. Replaces all messages with a single ``AIMessage`` containing the summary.
+    3. Persists the summary to ``HISTORY_SUMMARY.md``.
+    4. Truncates long-running state fields and records a compression event.
+    """
+    from mokioclaw.graph.memory import build_layered_memory, format_layered_memory_for_prompt
+
+    runtime = state.get("runtime") or RuntimeState()
+
+    # --- 1. Build the compression prompt ---
+    memory = build_layered_memory(state, node="context_compressor")
+    memory_payload = format_layered_memory_for_prompt(memory)
+
+    messages = list(state.get("messages") or [])
+    messages_text = _messages_to_text(messages)
+
+    model = create_model(
+        model_name=state.get("model_name", "gpt-5.5")
+    )
+
+    response = model.invoke([
+        SystemMessage(content=CONTEXT_COMPRESSION_PROMPT),
+        HumanMessage(
+            content=(
+                "Compress the following conversation and memory snapshot "
+                "into the JSON format described.\n\n"
+                f"## Messages\n{messages_text}\n\n"
+                f"## Memory Snapshot\n{memory_payload}"
+            )
+        ),
+    ])
+
+    # --- 2. Parse the compression result ---
+    raw = _extract_text(response)
+    try:
+        compressed = json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if m:
+            try:
+                compressed = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                compressed = {"summary": raw[:2000]}
+        else:
+            compressed = {"summary": raw[:2000]}
+
+    summary = compressed.get("summary", raw[:2000])
+
+    # --- 3. Replace message history ---
+    tokens_before = _estimate_tokens(state)
+    # Remove each message individually by its actual id
+    remove_ops = [RemoveMessage(id=msg.id) for msg in messages if getattr(msg, "id", None)]
+    new_aimessage = AIMessage(
+        content=(
+            f"[Context compressed]\n\n{summary}\n\n"
+            f"Active goal: {compressed.get('active_goal', '')}\n"
+            f"Completed: {compressed.get('completed_work', '')}\n"
+            f"Open todos: {json.dumps(compressed.get('open_todos', []), ensure_ascii=False)}\n"
+            f"Important files: {json.dumps(compressed.get('important_files', []), ensure_ascii=False)}\n"
+            f"Next steps: {compressed.get('next_steps', '')}\n"
+            f"Risks: {compressed.get('risks', '')}"
+        )
+    )
+
+    # --- 4. Persist to HISTORY_SUMMARY.md ---
+    _write_history_summary(runtime, summary)
+
+    # --- 5. Truncate long-running fields ---
+    updated = {
+        "messages": remove_ops + [new_aimessage],
+        "context_summary": _short_text(summary, 4000),
+        "context_token_count": len(summary) // 4,
+        "context_should_compress": False,
+        "research_notes": _short_text(
+            state.get("research_notes", ""), 1200
+        ),
+        "agent_handoffs": (state.get("agent_handoffs") or [])[-4:],
+        "history_summary": summary,
+    }
+
+    # --- 6. Record compression event ---
+    events = list(state.get("compression_events") or [])
+    events.append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "reason": "token_limit_exceeded",
+        "tokens_before": tokens_before,
+        "tokens_after": len(summary) // 4,
+    })
+    updated["compression_events"] = events
+
+    return updated
+
+
+# Sentinel value for RemoveMessage — tells LangGraph to clear all messages
+REMOVE_ALL_MESSAGES = "remove_all"
+
+
+def _messages_to_text(messages: list) -> str:
+    """Convert a list of LangChain messages to a plain-text transcript."""
+    parts: list[str] = []
+    for msg in messages:
+        role = getattr(msg, "type", "unknown")
+        content = getattr(msg, "content", "")
+        if isinstance(content, list):
+            text = " ".join(
+                b.get("text", "") if isinstance(b, dict) else str(b)
+                for b in content
+            )
+        else:
+            text = str(content)
+        if text.strip():
+            parts.append(f"[{role}] {text[:800]}")
+    return "\n".join(parts)
+
+
+def _write_history_summary(runtime: RuntimeState, summary: str) -> None:
+    """Write the compressed summary to HISTORY_SUMMARY.md."""
+    path = runtime.resolve("HISTORY_SUMMARY.md")
+    try:
+        path.write_text(summary, encoding="utf-8")
+    except OSError:
+        pass  # non-fatal: workspace may not be writable
+
+
+def _short_text(text: str, limit: int) -> str:
+    """Truncate *text* to *limit* characters, appending '...' if needed."""
+    if not text or len(text) <= limit:
+        return text or ""
+    return text[:limit] + "..."
+
+
+def context_monitor_route(state: MokioGraphState) -> str:
+    """Route after context monitor.
+
+    - If the task passed verification → ``"final"``
+    - If compression is needed → ``"context_compressor"``
+    - Otherwise → the node set in ``context_next_node``
+    """
+    if state.get("passed"):
+        return "final"
+
+    if state.get("context_should_compress"):
+        return "context_compressor"
+
+    return state.get("context_next_node", "verifier")
+
+
+def context_compressor_route(state: MokioGraphState) -> str:
+    """Route after context compressor.
+
+    Returns ``context_next_node`` (default ``"verifier"``).
+    """
+    return state.get("context_next_node", "verifier")
+
+
+def _estimate_tokens(state: MokioGraphState) -> int:
+    """Estimate token count from messages and memory snapshot.
+
+    Uses tiktoken if available, otherwise falls back to ``len(text) // 4``.
+    """
+    # Collect all text from messages
+    messages = state.get("messages") or []
+    text_parts: list[str] = []
+    for msg in messages:
+        content = getattr(msg, "content", "")
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text_parts.append(block.get("text", ""))
+                elif isinstance(block, str):
+                    text_parts.append(block)
+
+    # Add memory snapshot
+    from mokioclaw.graph.memory import build_layered_memory, format_layered_memory_for_prompt
+    memory = build_layered_memory(state)
+    text_parts.append(format_layered_memory_for_prompt(memory))
+
+    combined = "\n".join(text_parts)
+
+    # Try tiktoken
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("o200k_base")  # gpt-4o / gpt-5 tokenizer
+        return len(enc.encode(combined))
+    except Exception:
+        pass
+
+    # Fallback
+    return len(combined) // 4
 
 def verifier_route(state: MokioGraphState) -> str:
     """Route after verifier: go to final, or loop back to planner for retry."""
