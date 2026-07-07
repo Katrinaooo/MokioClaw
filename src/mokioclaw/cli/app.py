@@ -1,12 +1,14 @@
 """Typer CLI — the ``mokioclaw`` command."""
 
 from pathlib import Path
+from typing import Annotated, Literal, Optional
 
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
+from typer import Option
 
 from mokioclaw.core.agent import stream_agent_events
 from mokioclaw.core.paths import ensure_workspace
@@ -37,28 +39,38 @@ STATUS_ICONS = {
 
 @app.command()
 def run(
-    task: str = typer.Argument(..., help="The task description to execute."),
-    workspace: str = typer.Option(
-        None,
-        "--workspace",
-        "-w",
-        help="Workspace directory. Defaults to an auto-created temp directory.",
-    ),
-    model: str = typer.Option(
-        "gpt-5.5",
-        "--model",
-        "-m",
-        help="OpenAI model name to use.",
-    ),
-    max_attempts: int = typer.Option(
-        3,
-        "--max-attempts",
-        "-a",
-        help="Maximum plan→execute→verify cycles (default 3).",
-    ),
+    task: Annotated[str, typer.Argument(help="The task description to execute.")],
+    workspace: Annotated[
+        Optional[Path],
+        Option("--workspace", "-w", help="Workspace directory."),
+    ] = None,
+    model: Annotated[
+        str,
+        Option("--model", "-m", help="OpenAI model name to use."),
+    ] = "gpt-5.5",
+    max_attempts: Annotated[
+        int,
+        Option("--max-attempts", "-a", help="Maximum plan→execute→verify cycles (default 3)."),
+    ] = 3,
+    approval_mode: Annotated[
+        Literal["inline", "auto", "deny"],
+        Option("--approval-mode", help="Approval mode: inline, auto, or deny (default inline)."),
+    ] = "inline",
+    checkpoint_mode: Annotated[
+        Literal["light", "strict", "off"],
+        Option("--checkpoint-mode", help="Checkpoint mode: light, strict, or off (default light)."),
+    ] = "light",
+    trace_mode: Annotated[
+        Literal["on", "off"],
+        Option("--trace-mode", help="Trace mode: on or off (default on)."),
+    ] = "on",
+    resume: Annotated[
+        Optional[Path],
+        Option("--resume", help="Resume from a previous workspace."),
+    ] = None,
 ):
     """Run an AI agent to accomplish *task* within the given workspace."""
-    ws = ensure_workspace(workspace) if workspace else ensure_workspace("./workspace")
+    ws = ensure_workspace(str(workspace)) if workspace else ensure_workspace("./workspace")
 
     console.print()
     console.print(
@@ -78,6 +90,10 @@ def run(
         workspace=ws,
         model_name=model,
         max_attempts=max_attempts,
+        approval_mode=approval_mode,
+        checkpoint_mode=checkpoint_mode,
+        trace_mode=trace_mode,
+        resume_workspace=str(resume) if resume else "",
     ):
         etype = event["type"]
 

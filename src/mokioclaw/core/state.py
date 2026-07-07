@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 
 
 @dataclass
@@ -12,7 +13,25 @@ class RuntimeState:
     """
 
     workspace: Path = field(default_factory=Path.cwd)
-    """Root directory for all tool I/O. Paths are resolved relative to this."""
+    """Root directory for all tool I/O."""
+
+    approval_mode: str = "inline"
+    """Approval mode: ``"inline"``, ``"auto"``, or ``"deny"``."""
+
+    approval_handler: Callable[..., Any] | None = None
+    """Callback for ``"inline"`` approval mode."""
+
+    checkpoint_mode: str = "light"
+    """Checkpoint mode: ``"light"``, ``"strict"``, or ``"off"``."""
+
+    trace_mode: str = "on"
+    """Trace mode: ``"on"`` or ``"off"``."""
+
+    trace_id: str = ""
+    """Trace session id.  Auto-generated if empty."""
+
+    resume_from: str = ""
+    """Path to a previous workspace to resume from."""
 
     def resolve(self, path: str | Path) -> Path:
         """Resolve a user-supplied path against the workspace.
@@ -39,3 +58,23 @@ class RuntimeState:
                 f"{str(self.workspace)!r}"
             )
         return resolved
+
+
+def create_runtime(
+    workspace: str | Path,
+    *,
+    approval_mode: str = "inline",
+    approval_handler: Callable[..., Any] | None = None,
+    checkpoint_mode: str = "light",
+    trace_mode: str = "on",
+    resume_from: str = "",
+) -> RuntimeState:
+    """Create a ``RuntimeState`` with sensible defaults."""
+    return RuntimeState(
+        workspace=Path(workspace),
+        approval_mode=approval_mode,
+        approval_handler=approval_handler,
+        checkpoint_mode=checkpoint_mode,
+        trace_mode=trace_mode,
+        resume_from=resume_from,
+    )
