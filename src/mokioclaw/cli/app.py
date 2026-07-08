@@ -298,9 +298,10 @@ def _make_bar(pct: float, width: int) -> str:
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
-    """MokioClaw entry point.  Use ``run`` to execute a task, or ``mokioclaw --help``."""
+    """MokioClaw entry point.  ``mokioclaw`` launches the TUI; ``mokioclaw run`` is the CLI."""
     if ctx.invoked_subcommand is None:
-        typer.echo(app.get_help(ctx))
+        from mokioclaw.cli.tui.app import run_tui
+        run_tui()
 
 
 if __name__ == "__main__":

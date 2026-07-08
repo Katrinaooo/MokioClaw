@@ -94,31 +94,119 @@ class EventStream(RichLog):
         if etype == "tool_call":
             name = event.get("name", "?")
             args = event.get("args", {})
-            args_str = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
-            self.write(f"[bold yellow]🔧 {name}[/bold yellow] [dim]{args_str}[/dim]")
+            if name == "WebSearchTool":
+                q = args.get("query", "")
+                self.write(f"[bold cyan]🔍[/bold cyan] [italic]\"{q}\"[/italic] → searching...")
+            elif name in ("CallSearchAgentTool", "CallCodeAgentTool"):
+                inst = str(args.get("instruction", ""))[:80]
+                icon = "🔍" if "Search" in name else "🔧"
+                self.write(f"[bold yellow]{icon} Delegating to {name.replace('Call','').replace('AgentTool','')}[/bold yellow]")
+            else:
+                args_str = ", ".join(f"{k}={v}" for k, v in list(args.items())[:2])
+                self.write(f"[bold yellow]🔧 {name}[/bold yellow] [dim]{args_str}[/dim]")
+
         elif etype == "tool_result":
             name = event.get("name", "?")
-            result = str(event.get("result", ""))[:200]
-            self.write(f"[dim]📋 {name}: {result}[/dim]")
+            result = str(event.get("result", ""))
+            if name == "WebSearchTool":
+                try:
+                    import json
+                    r = json.loads(result)
+                    count = len(r.get("results", []))
+                    self.write(f"[dim]📋 Found {count} results[/dim]")
+                except Exception:
+                    self.write(f"[dim]📋 Search completed[/dim]")
+            elif name == "FileWriteTool":
+                self.write(f"[dim]📝 File written ({len(result)} bytes)[/dim]")
+            else:
+                self.write(f"[dim]📋 {name}: {result[:120]}[/dim]")
+
+        elif etype == "search_results":
+            try:
+                import json
+                r = json.loads(str(event.get("result", "{}")))
+                results = r.get("results", [])
+                for res in results[:3]:
+                    title = res.get("title", "")[:60]
+                    self.write(f"  [dim]• {title}[/dim]")
+            except Exception:
+                pass
+
         elif etype == "handoff":
             fr = event.get("from", "?")
             to = event.get("to", "?")
             inst = str(event.get("instruction", ""))[:100]
-            self.write(f"[bold magenta]🔄 {fr} → {to}[/bold magenta] [dim]{inst}[/dim]")
+            if to == "searchAgent":
+                self.write(f"[bold cyan]🔄 {fr} → {to}[/bold cyan] [dim]searching...[/dim]")
+            elif to == "codeAgent":
+                self.write(f"[bold yellow]🔄 {fr} → {to}[/bold yellow] [dim]working...[/dim]")
+            else:
+                self.write(f"[bold magenta]🔄 {fr} → {to}[/bold magenta] [dim]{inst}[/dim]")
+
         elif etype == "checkpoint_saved":
-            self.write(f"[dim]💾 Checkpoint saved at {event.get('timestamp', '')[:19]}[/dim]")
+            self.write(f"[dim]💾 Checkpoint saved[/dim]")
+
         elif etype == "final_answer":
-            content = str(event.get("content", ""))[:500]
-            self.write(f"[bold green]✅ {content}[/bold green]")
+            content = str(event.get("content", ""))[:600]
+            self.write(f"\n[bold green]✅ {content}[/bold green]\n")
+
         elif etype == "verification":
             passed = event.get("passed", False)
-            icon = "✅" if passed else "❌"
-            self.write(f"[bold]{icon} Verification: {'PASSED' if passed else 'FAILED'}[/bold]")
+            if passed:
+                checks = event.get("checks", [])
+                detail = ", ".join(c.get("name", "") for c in checks[:3])
+                self.write(f"[bold green]✅ Verified:[/bold green] [dim]{detail}[/dim]")
+            else:
+                self.write(f"[bold red]❌ Verification FAILED[/bold red]")
+
         elif etype == "node_start":
             node = event.get("node", "?")
-            self.write(f"[bold blue]▶ {node}[/bold blue]")
+            if node == "planner":
+                self.write(f"\n[bold cyan]📋 Plan:[/bold cyan]")
+            elif node == "verifier":
+                self.write(f"\n[bold]🔍 Verifying...[/bold]")
+            elif node == "final":
+                pass  # handled by final_answer
+
         elif etype == "session_start":
-            self.write(f"[bold]📂 Session {event.get('session_id', '')[:12]} turn {event.get('turn', 0)}[/bold]")
+            sid = event.get("session_id", "")[:12]
+            turn = event.get("turn", 0)
+            route = event.get("route", "workflow")
+            self.write(f"[dim]Session: {sid} | Turn: {turn} | Route: {route}[/dim]")
+
+        elif etype == "plan":
+            summary = event.get("summary", "")
+            self.write(f"[bold cyan]📋 Plan:[/bold cyan] [italic]{summary}[/italic]")
+            for t in (event.get("todos") or []):
+                icon = {"completed": "✅", "blocked": "❌", "in_progress": "🔄", "pending": "⬜"}.get(
+                    t.get("status", "pending"), "⬜"
+                )
+                self.write(f"  {icon} {t.get('content', '')}")
+
+        elif etype == "chat_response":
+            self.write(f"[bold]🗨️ Chat:[/bold] {event.get('content', '')[:500]}")
+
+
+class StatusBar(Static):
+    """Shows session info, mode, and workspace path."""
+
+    def update_status(
+        self,
+        session_id: str = "",
+        workspace: str = "",
+        approval_mode: str = "inline",
+        checkpoint_mode: str = "light",
+        trace_mode: str = "on",
+    ) -> None:
+        sid = session_id[:12] if session_id else "—"
+        ws = Path(workspace).name if workspace else "—"
+        self.update(
+            f"[dim]Session:[/dim] {sid}  "
+            f"[dim]Workspace:[/dim] {ws}  "
+            f"[dim]Approval:[/dim] {approval_mode}  "
+            f"[dim]Checkpoint:[/dim] {checkpoint_mode}  "
+            f"[dim]Trace:[/dim] {trace_mode}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +231,7 @@ class MokioClawTuiApp(App[None]):
     """
 
     TITLE = "🐾 MokioClaw"
-    SUB_TITLE = "Multi-Agent TUI"
+    SUB_TITLE = "Stage 6 · MultiAgent + Context + Harness"
     CSS = """
     #plan-panel {
         height: auto;
@@ -158,26 +246,16 @@ class MokioClawTuiApp(App[None]):
         border: solid $surface;
         margin: 0 1;
     }
+    #status-bar {
+        height: 1;
+        padding: 0 1;
+        margin: 0 1;
+        background: $surface;
+    }
     #input-area {
         height: 3;
         margin: 0 1;
         padding: 0 1;
-    }
-    #approval-dialog {
-        width: 60;
-        height: auto;
-        border: thick $error;
-        background: $surface;
-        padding: 1 2;
-    }
-    #approval-title {
-        color: $error;
-        text-style: bold;
-        content-align: center;
-    }
-    #approval-hint {
-        color: $text-disabled;
-        content-align: center;
     }
     """
 
@@ -207,14 +285,25 @@ class MokioClawTuiApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield StatusBar(id="status-bar")
         yield PlanPanel(id="plan-panel")
         yield EventStream(id="event-stream", markup=True, wrap=True, highlight=True)
         with Container(id="input-area"):
-            yield Input(placeholder="💬 Enter your task...", id="task-input")
+            yield Input(placeholder="💬 输入任务或聊天...", id="task-input")
         yield Footer()
 
     def on_mount(self) -> None:
-        """Focus the input field on startup."""
+        """Show welcome message and focus the input field."""
+        stream = self.query_one(EventStream)
+        stream.write(f"[bold cyan]🐾 MokioClaw[/bold cyan] [dim]v0.6.0 — Stage 6: TUI + Session[/dim]")
+        stream.write("")
+
+        self.query_one(StatusBar).update_status(
+            workspace=str(self._workspace),
+            approval_mode=self._approval_mode,
+            checkpoint_mode=self._checkpoint_mode,
+            trace_mode=self._trace_mode,
+        )
         self.query_one("#task-input", Input).focus()
 
     # ------------------------------------------------------------------
@@ -305,3 +394,29 @@ class MokioClawTuiApp(App[None]):
 
     def action_quit(self) -> None:
         self.exit()
+
+
+# ---------------------------------------------------------------------------
+# Entry point for the CLI
+# ---------------------------------------------------------------------------
+
+
+def run_tui(
+    workspace: str | None = None,
+    model_name: str = "gpt-5.5",
+    max_attempts: int = 3,
+    approval_mode: str = "inline",
+    checkpoint_mode: str = "light",
+    trace_mode: str = "on",
+) -> None:
+    """Launch the MokioClaw TUI."""
+    ws = ensure_workspace(workspace) if workspace else ensure_workspace("./workspace")
+    app = MokioClawTuiApp(
+        workspace=ws,
+        model_name=model_name,
+        max_attempts=max_attempts,
+        approval_mode=approval_mode,
+        checkpoint_mode=checkpoint_mode,
+        trace_mode=trace_mode,
+    )
+    app.run()
