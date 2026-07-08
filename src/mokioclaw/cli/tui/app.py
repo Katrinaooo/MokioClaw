@@ -366,6 +366,16 @@ class MokioClawTuiApp(App[None]):
             plan_panel.todos = event.get("todos") or []
             plan_panel.criteria = event.get("acceptance_criteria") or []
 
+        # Update status bar on session start
+        if etype == "session_start":
+            self.query_one(StatusBar).update_status(
+                session_id=event.get("session_id", ""),
+                workspace=str(self._workspace),
+                approval_mode=self._approval_mode,
+                checkpoint_mode=self._checkpoint_mode,
+                trace_mode=self._trace_mode,
+            )
+
         # Add to event stream
         self.query_one(EventStream).add_event(event)
 

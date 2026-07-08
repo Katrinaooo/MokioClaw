@@ -1,10 +1,10 @@
 # MokioClaw Recovery
 
-**Task:** 你好
+**Task:** tui
 
-**Status:** finished
-**Last node:** final
-**Git commit:** `33b71f79d6add73e2f702b6cc89405aa8b6c0959`
+**Status:** started
+**Last node:** start
+**Git commit:** `bf5a38d569ee6aab06fde677fec6eb973315de36`
 
 ## Resume
 
@@ -14,8 +14,7 @@ mokioclaw run --resume D:\MokioClaw\workspace
 
 ## Todos
 
-- [pending] Acknowledge the user's greeting in Chinese.
-- [pending] Delegate a no-op/context check to the code specialist so the required agent delegation step is satisfied.
+(none)
 
 ## Workspace files
 
