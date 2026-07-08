@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-07-08T10:25:14.282182+00:00",
+  "timestamp": "2026-07-08T10:25:14.593215+00:00",
   "task": "你好",
   "status": "running",
-  "latest_node": "verifier",
+  "latest_node": "context_monitor",
   "mode": "light",
   "attempts": 1,
   "max_attempts": 3,
@@ -22,7 +22,7 @@
       "note": "Specialist should not modify files."
     }
   ],
-  "git_commit": "ed83d6bb9954bd83f00c682ada132c2610f5639b",
+  "git_commit": "61a51973a90db17ac1889ca127adee7c2721be72",
   "workspace_manifest": [
     "HISTORY_SUMMARY.md",
     "README.md",
