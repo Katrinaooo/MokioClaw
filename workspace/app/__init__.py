@@ -56,18 +56,15 @@ def request_wants_json():
 def register_cli(app):
     @app.cli.command("init-db")
     def init_db_command():
-        from .models import User
+        from .tui import initialize_database
 
-        db.create_all()
-        admin = User.query.filter_by(username="admin").first()
-        if admin is None:
-            admin = User(username="admin", email="admin@example.com", is_admin=True)
-            admin.set_password("admin123")
-            db.session.add(admin)
-            db.session.commit()
-            print("数据库已初始化，默认管理员：admin / admin123")
-        else:
-            print("数据库已初始化，默认管理员已存在。")
+        print(initialize_database(app))
+
+    @app.cli.command("tui")
+    def tui_command():
+        from .tui import run_tui
+
+        run_tui(app)
 
 
 def register_error_handlers(app):

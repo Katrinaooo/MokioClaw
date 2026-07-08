@@ -1,0 +1,22 @@
+{
+  "session_id": "session-640abf41ee8f",
+  "turn_index": 1,
+  "recent_turns": [
+    {
+      "turn": 1,
+      "role": "user",
+      "content": "你好",
+      "timestamp": "2026-07-08T10:30:05.444168+00:00"
+    },
+    {
+      "turn": 1,
+      "role": "assistant",
+      "route": "chat",
+      "content": "你好！有什么我可以帮你的吗？",
+      "summary": "你好！有什么我可以帮你的吗？",
+      "timestamp": "2026-07-08T10:30:16.133309+00:00"
+    }
+  ],
+  "created_at": "2026-07-08T10:30:05.444168+00:00",
+  "updated_at": "2026-07-08T10:30:16.133309+00:00"
+}

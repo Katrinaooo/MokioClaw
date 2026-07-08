@@ -2,9 +2,9 @@
 
 **Task:** tui
 
-**Status:** started
+**Status:** running
 **Last node:** start
-**Git commit:** `bf5a38d569ee6aab06fde677fec6eb973315de36`
+**Git commit:** `2ff1f1dda46919b71ee45352ac599f3028ff0682`
 
 ## Resume
 

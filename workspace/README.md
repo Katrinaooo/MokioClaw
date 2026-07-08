@@ -9,7 +9,7 @@
 - 用户认证：Flask-Login 登录、登出、后台页面保护
 - 后台页面：仪表盘、用户列表
 - REST API：健康检查、当前用户、用户列表
-- CLI 初始化数据库并创建默认管理员
+- CLI 初始化数据库、启动终端管理菜单
 - pytest 自动化测试
 
 ## 安装依赖
@@ -52,6 +52,16 @@ python -m flask --app run.py run --debug
 - 登录页：`http://127.0.0.1:5000/login`
 - 后台首页：`http://127.0.0.1:5000/admin`
 - 用户管理：`http://127.0.0.1:5000/admin/users`
+
+## 终端管理菜单
+
+无需额外依赖，可通过 Flask CLI 打开简易 TUI 菜单查看系统状态、用户列表或初始化数据库：
+
+```bash
+python -m flask --app run.py tui
+```
+
+菜单中输入 `q` 可退出。
 
 ## API 示例
 
