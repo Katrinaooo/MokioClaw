@@ -871,6 +871,123 @@ def _short_text(text: str, limit: int) -> str:
     return text[:limit] + "..."
 
 
+# ---------------------------------------------------------------------------
+# Entry workflow: intent router + chat responder
+# ---------------------------------------------------------------------------
+
+INTENT_ROUTER_PROMPT = """\
+You are the intent router for MokioClaw.
+
+Classify the user's latest input into exactly one route:
+- chat: greetings, thanks, identity/help questions, ordinary conceptual Q&A,
+  or conversational messages that do not need workspace access.
+- workflow: any request that needs creating/editing/reading files, running commands,
+  installing packages, searching the web, checking the current project, verifying a
+  result, or producing a concrete deliverable.
+
+When session context is provided, use it only to understand whether the latest
+input is a continuation of prior coding work. A short follow-up like "继续",
+"修一下", or "运行测试" should be workflow if it refers to prior workspace work.
+
+Return only JSON with this shape:
+{"route":"chat"|"workflow","reason":"brief reason","confidence":0.0}
+
+If uncertain, choose workflow.
+"""
+
+CHAT_RESPONDER_PROMPT = """\
+You are MokioClaw's lightweight chat node.
+
+Answer the user directly and concisely. Do not claim that you read files,
+searched the web, ran commands, edited files, or inspected the workspace.
+If the user asks for work requiring tools or project context, say that it
+should be handled by the workflow route.
+
+If session context is provided, you may use the recent conversation summary to
+answer conversational follow-ups, but do not invent workspace facts.
+"""
+
+
+def intent_router_node(state: MokioGraphState) -> dict:
+    """Classify the user's input as ``"chat"`` or ``"workflow"``.
+
+    Uses a lightweight LLM call with no tools.  Falls back to ``"workflow"``
+    if the model output is unparseable or confidence is below 0.55.
+    """
+    model = create_model(
+        model_name=state.get("model_name", "gpt-5.5")
+    )
+    session_context = state.get("plan_summary", "")  # reused as session context
+
+    messages = [
+        SystemMessage(content=INTENT_ROUTER_PROMPT),
+        HumanMessage(
+            content=(
+                f"User input: {state['task']}\n\n"
+                f"Session context:\n{session_context or '(none)'}"
+            )
+        ),
+    ]
+
+    response = model.invoke(messages)
+    text = _extract_text(response)
+
+    try:
+        verdict = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            try:
+                verdict = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                verdict = {}
+        else:
+            verdict = {}
+
+    route = verdict.get("route", "workflow")
+    confidence = float(verdict.get("confidence", 0.0))
+
+    if route not in ("chat", "workflow"):
+        route = "workflow"
+    if confidence < 0.55:
+        route = "workflow"
+
+    return {
+        "intent_route": route,
+        "intent_reason": verdict.get("reason", ""),
+        "intent_confidence": confidence,
+    }
+
+
+def chat_responder_node(state: MokioGraphState) -> dict:
+    """Reply to a chat message directly, without any tools."""
+    model = create_model(
+        model_name=state.get("model_name", "gpt-5.5")
+    )
+    session_context = state.get("plan_summary", "")
+
+    messages = [
+        SystemMessage(content=CHAT_RESPONDER_PROMPT),
+        HumanMessage(
+            content=(
+                f"User: {state['task']}\n\n"
+                f"Session context:\n{session_context or '(none)'}"
+            )
+        ),
+    ]
+
+    response = model.invoke(messages)
+    return {
+        "chat_response": _extract_text(response),
+        "final_answer": _extract_text(response),
+    }
+
+
+def intent_route_fn(state: MokioGraphState) -> str:
+    """Route after intent classification."""
+    return "chat_responder" if state.get("intent_route") == "chat" else "planner"
+
+
 def context_monitor_route(state: MokioGraphState) -> str:
     """Route after context monitor.
 
@@ -943,3 +1060,119 @@ def verifier_route(state: MokioGraphState) -> str:
         return "final"
 
     return "planner"
+
+
+# ---------------------------------------------------------------------------
+# Entry / intent routing
+# ---------------------------------------------------------------------------
+
+INTENT_ROUTER_PROMPT = """\
+You are the intent router for MokioClaw.
+
+Classify the user's latest input into exactly one route:
+- chat: greetings, thanks, identity/help questions, ordinary conceptual Q&A,
+  or conversational messages that do not need workspace access.
+- workflow: any request that needs creating/editing/reading files, running commands,
+  installing packages, searching the web, checking the current project, verifying a
+  result, or producing a concrete deliverable.
+
+When session context is provided, use it only to understand whether the latest
+input is a continuation of prior coding work. A short follow-up like "继续",
+"修一下", or "运行测试" should be workflow if it refers to prior workspace work.
+
+Return only JSON with this shape:
+{"route":"chat"|"workflow","reason":"brief reason","confidence":0.0}
+
+If uncertain, choose workflow.
+"""
+
+CHAT_RESPONDER_PROMPT = """\
+You are MokioClaw's lightweight chat node.
+
+Answer the user directly and concisely. Do not claim that you read files,
+searched the web, ran commands, edited files, or inspected the workspace.
+If the user asks for work requiring tools or project context, say that it
+should be handled by the workflow route.
+
+If session context is provided, you may use the recent conversation summary to
+answer conversational follow-ups, but do not invent workspace facts.
+"""
+
+
+def intent_router_node(state: MokioGraphState) -> dict:
+    """Classify the user's intent as chat or workflow.
+
+    1. Calls a lightweight LLM with INTENT_ROUTER_PROMPT.
+    2. Parses the JSON response for route, reason, confidence.
+    3. Defaults to workflow if confidence < 0.55 or parsing fails.
+    """
+    model = create_model(
+        model_name=state.get("model_name", "gpt-5.5")
+    )
+
+    response = model.invoke([
+        SystemMessage(content=INTENT_ROUTER_PROMPT),
+        HumanMessage(
+            content=(
+                f"User input: {state.get('task', '')}\n\n"
+                f"Session context: {state.get('plan_summary', '')[:200]}"
+            )
+        ),
+    ])
+
+    raw = _extract_text(response)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                parsed = {}
+        else:
+            parsed = {}
+
+    route = parsed.get("route", "workflow")
+    reason = parsed.get("reason", "")
+    confidence = float(parsed.get("confidence", 0))
+
+    if route not in ("chat", "workflow"):
+        route = "workflow"
+    if confidence < 0.55:
+        route = "workflow"
+
+    return {
+        "intent_route": route,
+        "intent_reason": reason,
+        "intent_confidence": confidence,
+    }
+
+
+def chat_responder_node(state: MokioGraphState) -> dict:
+    """Lightweight chat response — no tools, direct LLM answer."""
+    model = create_model(
+        model_name=state.get("model_name", "gpt-5.5")
+    )
+
+    response = model.invoke([
+        SystemMessage(content=CHAT_RESPONDER_PROMPT),
+        HumanMessage(
+            content=(
+                f"User: {state.get('task', '')}\n\n"
+                f"Session context: {state.get('plan_summary', '')[:200]}"
+            )
+        ),
+    ])
+
+    chat_response = _extract_text(response)
+
+    return {
+        "chat_response": chat_response,
+        "final_answer": chat_response,
+    }
+
+
+def intent_route_fn(state: MokioGraphState) -> str:
+    """Route after intent classification."""
+    return "chat_responder" if state.get("intent_route") == "chat" else "planner"

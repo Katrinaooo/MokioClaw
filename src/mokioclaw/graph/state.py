@@ -160,3 +160,17 @@ class MokioGraphState(TypedDict, total=False):
 
     history_summary: str
     """Content of HISTORY_SUMMARY.md (compressed conversation history)."""
+
+    # --- Entry / intent routing fields ---
+
+    intent_route: str
+    """Route decision: ``"chat"`` or ``"workflow"``."""
+
+    intent_reason: str
+    """Brief explanation for the intent route decision."""
+
+    intent_confidence: float
+    """Confidence score for the intent route (0.0–1.0)."""
+
+    chat_response: str
+    """Response text from the chat responder node."""

@@ -6,9 +6,16 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from mokioclaw.core.checkpoint import CheckpointManager
+from mokioclaw.core.session import (
+    append_assistant_turn,
+    append_user_turn,
+    build_session_context,
+    load_or_create_session,
+    save_session,
+)
 from mokioclaw.core.state import RuntimeState, create_runtime
 from mokioclaw.core.trace import TraceRecorder
-from mokioclaw.graph.workflow import build_workflow
+from mokioclaw.graph.workflow import build_entry_workflow, build_workflow
 
 
 def stream_agent_events(
@@ -125,6 +132,154 @@ def stream_agent_events(
 
     finally:
         _finalize(manager, trace, current_state, latest_node)
+
+
+def stream_session_events(
+    task: str,
+    *,
+    workspace: Path,
+    model_name: str = "gpt-5.5",
+    max_attempts: int = 3,
+    approval_mode: str = "inline",
+    approval_handler: Callable[..., Any] | None = None,
+    checkpoint_mode: str = "light",
+    trace_mode: str = "on",
+    resume_workspace: str = "",
+) -> Iterator[dict[str, Any]]:
+    """Multi-turn session-aware agent loop.
+
+    1. Loads or creates a session for the workspace.
+    2. Records the user's turn.
+    3. Runs the entry workflow (intent_router → chat or workflow).
+    4. If chat: replies directly, records assistant turn.
+    5. If workflow: runs the full plan→verify graph, records assistant turn.
+    6. Saves the session after each turn.
+    """
+    # --- 1. Load session ---
+    session = load_or_create_session(workspace)
+    turn = append_user_turn(session, task)
+    session_context = build_session_context(workspace, session)
+
+    # --- 2. Run entry workflow ---
+    entry_graph = build_entry_workflow()
+    entry_inputs: dict[str, Any] = {
+        "task": task,
+        "plan_summary": session_context,
+        "model_name": model_name,
+    }
+
+    entry_result = entry_graph.invoke(entry_inputs)
+    route = entry_result.get("intent_route", "workflow")
+
+    yield {
+        "type": "session_start",
+        "session_id": session.get("session_id", ""),
+        "turn": turn,
+        "route": route,
+    }
+
+    # --- 3. Chat branch ---
+    if route == "chat":
+        chat_response = entry_result.get("chat_response", "")
+        yield {
+            "type": "final_answer",
+            "content": chat_response,
+        }
+
+        append_assistant_turn(
+            session, turn=turn, route="chat",
+            content=chat_response,
+            summary=chat_response[:200],
+        )
+        save_session(workspace, session)
+        return
+
+    # --- 4. Workflow branch ---
+    # Enrich task with session context
+    enriched_task = f"{task}\n\n[Session context]\n{session_context}"
+
+    state = create_runtime(
+        workspace,
+        approval_mode=approval_mode,
+        approval_handler=approval_handler,
+        checkpoint_mode=checkpoint_mode,
+        trace_mode=trace_mode,
+        resume_from=resume_workspace,
+    )
+
+    manager = CheckpointManager(state, task=task)
+    trace = TraceRecorder(state, task=task)
+
+    inputs: dict[str, Any] = {
+        "task": task,
+        "model_name": model_name,
+        "runtime": state,
+        "max_attempts": max_attempts,
+    }
+
+    trace.start(inputs)
+    graph = build_workflow()
+    current_state: dict[str, Any] = dict(inputs)
+    latest_node = "start"
+    manager.save(current_state, status="started", latest_node="start")
+
+    final_content = ""
+
+    try:
+        for chunk in graph.stream(inputs, stream_mode=["updates", "custom"]):
+            mode, data = chunk
+
+            if mode == "custom":
+                trace.record_custom_event(data)
+                if data.get("type") in ("tool_call", "handoff"):
+                    manager.save(
+                        current_state, status="running",
+                        latest_node=latest_node, event=data,
+                    )
+                yield from _emit_custom(data)
+                continue
+
+            for node_name, node_output in data.items():
+                latest_node = node_name
+                current_state.update(node_output)
+
+                trace.record_graph_update({"node": node_name})
+                manager.save(
+                    current_state, status="running",
+                    latest_node=latest_node,
+                    event={"type": "node_update", "node": node_name},
+                )
+
+                yield {"type": "node_start", "node": node_name}
+
+                if node_name == "planner":
+                    yield from _emit_planner(node_output)
+
+                elif node_name == "verifier":
+                    yield from _emit_verifier(node_output)
+
+                elif node_name == "final":
+                    final_content = node_output.get("final_answer", "")
+                    yield from _emit_final(node_output)
+
+                elif node_name == "context_monitor":
+                    yield from _emit_context_monitor(node_output)
+
+                elif node_name == "context_compressor":
+                    yield from _emit_context_compressor(node_output)
+
+                yield {"type": "node_end", "node": node_name}
+
+    finally:
+        _finalize(manager, trace, current_state, latest_node)
+
+    # --- 5. Record assistant turn ---
+    append_assistant_turn(
+        session, turn=turn, route="workflow",
+        content=final_content,
+        summary=final_content[:200],
+    )
+    save_session(workspace, session)
 
 
 # ---------------------------------------------------------------------------
