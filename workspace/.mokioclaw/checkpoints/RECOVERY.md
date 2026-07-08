@@ -2,9 +2,9 @@
 
 **Task:** tui
 
-**Status:** running
+**Status:** finished
 **Last node:** start
-**Git commit:** `2ff1f1dda46919b71ee45352ac599f3028ff0682`
+**Git commit:** `cbf011903d024aa4fdf357fc1b824ca90e87328e`
 
 ## Resume
 
@@ -29,6 +29,7 @@ mokioclaw run --resume D:\MokioClaw\workspace
 - app/__pycache__/__init__.cpython-311.pyc
 - app/__pycache__/config.cpython-311.pyc
 - app/__pycache__/models.cpython-311.pyc
+- app/__pycache__/tui.cpython-311.pyc
 - app/admin/__init__.py
 - app/admin/__pycache__/__init__.cpython-311.pyc
 - app/admin/__pycache__/routes.cpython-311.pyc
@@ -47,4 +48,3 @@ mokioclaw run --resume D:\MokioClaw\workspace
 - app/static/css/style.css
 - app/templates/admin/dashboard.html
 - app/templates/admin/users.html
-- app/templates/auth/login.html

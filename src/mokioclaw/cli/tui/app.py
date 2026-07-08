@@ -304,6 +304,21 @@ class MokioClawTuiApp(App[None]):
             checkpoint_mode=self._checkpoint_mode,
             trace_mode=self._trace_mode,
         )
+
+        # Check for existing checkpoint
+        import json
+        cp_path = self._workspace / ".mokioclaw" / "checkpoints" / "checkpoint.json"
+        if cp_path.exists():
+            try:
+                cp = json.loads(cp_path.read_text(encoding="utf-8"))
+                task = cp.get("task", "?")
+                status = cp.get("status", "?")
+                stream.write(f"[yellow]⚡ Found checkpoint:[/yellow] [dim]{task[:80]}[/dim] ([italic]{status}[/italic])")
+                stream.write(f"[dim]Type [bold]/resume[/bold] to continue, or enter a new task to start fresh.[/dim]")
+                stream.write("")
+            except Exception:
+                pass
+
         self.query_one("#task-input", Input).focus()
 
     # ------------------------------------------------------------------
@@ -317,6 +332,11 @@ class MokioClawTuiApp(App[None]):
             return
 
         event.input.clear()
+
+        if task == "/resume":
+            self._resume_agent()
+            return
+
         self._start_agent(task)
 
     # ------------------------------------------------------------------
@@ -349,6 +369,24 @@ class MokioClawTuiApp(App[None]):
         finally:
             query.disabled = False
             query.focus()
+
+    def _resume_agent(self) -> None:
+        """Resume from the last checkpoint."""
+        cp_path = self._workspace / ".mokioclaw" / "checkpoints" / "checkpoint.json"
+        if not cp_path.exists():
+            self.query_one(EventStream).write("[red]No checkpoint found.[/red]")
+            return
+
+        import json
+        try:
+            cp = json.loads(cp_path.read_text(encoding="utf-8"))
+        except Exception:
+            self.query_one(EventStream).write("[red]Checkpoint unreadable.[/red]")
+            return
+
+        task = cp.get("task", "resume")
+        self.query_one(EventStream).write(f"[yellow]⚡ Resuming:[/yellow] [dim]{task[:80]}[/dim]")
+        self._start_agent(task)
 
     # ------------------------------------------------------------------
     # Event handling
