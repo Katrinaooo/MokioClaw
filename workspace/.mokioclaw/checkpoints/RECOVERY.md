@@ -3,8 +3,8 @@
 **Task:** 你好
 
 **Status:** running
-**Last node:** planner
-**Git commit:** `ca9465d80b47cfa7bd3dadbb61dcb0624ea806df`
+**Last node:** context_monitor
+**Git commit:** `af21e331c0ca1facdcee7238d6092c6ff8ca840a`
 
 ## Resume
 
